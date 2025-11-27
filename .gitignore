@@ -1,0 +1,19 @@
+claude.md
+*.log
+.DS_Store
+node_modules/
+dist/
+.env
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Data (generated at runtime)
+data/chroma/
+data/*.db
