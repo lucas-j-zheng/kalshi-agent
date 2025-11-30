@@ -301,13 +301,19 @@ class KalshiClient:
         except (ValueError, TypeError):
             close_time = datetime.now(timezone.utc)
 
+        # Clamp prices to valid range (1-99), default to 50 if missing/zero
+        yes_price = market.get("yes_bid", 50) or 50
+        no_price = market.get("no_bid", 50) or 50
+        yes_price = max(1, min(99, yes_price))
+        no_price = max(1, min(99, no_price))
+
         return MarketMatch(
             ticker=market["ticker"],
             title=market.get("title", ""),
             subtitle=market.get("subtitle", ""),
             category=market.get("category", ""),
-            yes_price=market.get("yes_bid", 50),  # Best bid for YES
-            no_price=market.get("no_bid", 50),    # Best bid for NO
+            yes_price=yes_price,
+            no_price=no_price,
             volume=market.get("volume", 0),
             close_time=close_time,
             relevance_score=0.0  # Not from search

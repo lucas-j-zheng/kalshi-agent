@@ -161,6 +161,12 @@ class LlamaIndexService:
             else:
                 close_timestamp = 0
 
+            # Clamp prices to valid range (1-99), default to 50 if missing/zero
+            yes_price = market.get('yes_bid', 50) or 50
+            no_price = market.get('no_bid', 50) or 50
+            yes_price = max(1, min(99, yes_price))
+            no_price = max(1, min(99, no_price))
+
             doc = Document(
                 text=text,
                 doc_id=market['ticker'],
@@ -169,8 +175,8 @@ class LlamaIndexService:
                     'title': market.get('title', ''),
                     'subtitle': market.get('subtitle', ''),
                     'category': market.get('category', ''),
-                    'yes_price': market.get('yes_bid', 50),
-                    'no_price': market.get('no_bid', 50),
+                    'yes_price': yes_price,
+                    'no_price': no_price,
                     'volume': market.get('volume', 0),
                     'close_time': close_time,
                     'close_timestamp': close_timestamp,
@@ -249,13 +255,17 @@ class LlamaIndexService:
             except (ValueError, TypeError):
                 close_time = datetime.now(timezone.utc)
 
+            # Clamp prices to valid range (1-99)
+            yes_price = max(1, min(99, meta.get('yes_price', 50) or 50))
+            no_price = max(1, min(99, meta.get('no_price', 50) or 50))
+
             results.append(MarketMatch(
                 ticker=meta['ticker'],
                 title=meta.get('title', ''),
                 subtitle=meta.get('subtitle', ''),
                 category=meta.get('category', ''),
-                yes_price=meta.get('yes_price', 50),
-                no_price=meta.get('no_price', 50),
+                yes_price=yes_price,
+                no_price=no_price,
                 volume=meta.get('volume', 0),
                 close_time=close_time,
                 relevance_score=node.score if node.score else 0.0
@@ -300,13 +310,17 @@ class LlamaIndexService:
         except (ValueError, TypeError):
             close_time = datetime.now(timezone.utc)
 
+        # Clamp prices to valid range (1-99)
+        yes_price = max(1, min(99, meta.get('yes_price', 50) or 50))
+        no_price = max(1, min(99, meta.get('no_price', 50) or 50))
+
         return MarketMatch(
             ticker=meta['ticker'],
             title=meta.get('title', ''),
             subtitle=meta.get('subtitle', ''),
             category=meta.get('category', ''),
-            yes_price=meta.get('yes_price', 50),
-            no_price=meta.get('no_price', 50),
+            yes_price=yes_price,
+            no_price=no_price,
             volume=meta.get('volume', 0),
             close_time=close_time,
             relevance_score=1.0  # Exact match
