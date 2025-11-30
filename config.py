@@ -14,8 +14,9 @@ class Settings(BaseSettings):
     )
 
     # Kalshi API Configuration
-    kalshi_api_key_id: str
-    kalshi_private_key_path: Path = Path("./keys/kalshi_private_key.pem")
+    kalshi_api_key_id: str = ""  # Optional in demo mode
+    kalshi_private_key_path: Optional[Path] = Path("./keys/kalshi_private_key.pem")
+    kalshi_private_key: str = ""  # Private key content (PEM) - alternative to file path
     kalshi_demo_mode: bool = True  # Use demo API (fake money) by default
 
     @property
@@ -51,20 +52,37 @@ class Settings(BaseSettings):
     debug: bool = False
 
     def get_private_key(self) -> bytes:
-        """Load RSA private key from file for Kalshi API authentication.
+        """Load RSA private key for Kalshi API authentication.
+
+        Checks env var KALSHI_PRIVATE_KEY first, then falls back to file.
 
         Returns:
             bytes: The raw private key bytes
 
         Raises:
-            FileNotFoundError: If key file doesn't exist
-            ValueError: If key file is empty or invalid
+            FileNotFoundError: If key file doesn't exist and no env var set
+            ValueError: If key is empty or invalid
         """
+        # First, try env var (for HF Spaces / cloud deployment)
+        if self.kalshi_private_key:
+            key_bytes = self.kalshi_private_key.encode("utf-8")
+            # Handle escaped newlines from env var
+            key_bytes = key_bytes.replace(b"\\n", b"\n")
+
+            if b"PRIVATE KEY" not in key_bytes:
+                raise ValueError(
+                    "Invalid KALSHI_PRIVATE_KEY format.\n"
+                    "Expected PEM format with 'PRIVATE KEY' header"
+                )
+            return key_bytes
+
+        # Fall back to file path
         key_path = self.kalshi_private_key_path
 
-        if not key_path.exists():
+        if not key_path or not key_path.exists():
             raise FileNotFoundError(
                 f"Kalshi private key not found at: {key_path}\n"
+                f"Set KALSHI_PRIVATE_KEY env var or place key file.\n"
                 f"Generate one at: https://kalshi.com/account/api"
             )
 

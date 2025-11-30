@@ -305,9 +305,10 @@ class KalshiClient:
         except (ValueError, TypeError):
             close_time = datetime.now(timezone.utc)
 
-        # Clamp prices to valid range (1-99), default to 50 if missing/zero
-        yes_price = market.get("yes_bid", 50) or 50
-        no_price = market.get("no_bid", 50) or 50
+        # Use ASK prices (what you pay to buy), not BID prices (what you get to sell)
+        # This ensures limit orders fill immediately
+        yes_price = market.get("yes_ask", 50) or market.get("yes_bid", 50) or 50
+        no_price = market.get("no_ask", 50) or market.get("no_bid", 50) or 50
         yes_price = max(1, min(99, yes_price))
         no_price = max(1, min(99, no_price))
 
@@ -372,7 +373,14 @@ class KalshiClient:
             order_data[price_key] = price
 
         response = self._request("POST", "/portfolio/orders", json=order_data)
-        return response.get("order", response)
+        order = response.get("order", response)
+
+        # Log order details for debugging
+        logger.info(f"Order response: status={order.get('status')}, "
+                    f"filled={order.get('filled_count', 0)}/{order.get('count', 0)}, "
+                    f"remaining={order.get('remaining_count', 'unknown')}")
+
+        return order
 
     def get_orders(
         self,
