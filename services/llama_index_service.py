@@ -1,7 +1,7 @@
 """LlamaIndex service for semantic search over Kalshi markets.
 
 Provides:
-- Market indexing with OpenAI embeddings
+- Market indexing with embeddings (HuggingFace by default, free & local)
 - Semantic search by natural language query
 - Filtered search by category, status, date
 - Persistent storage via ChromaDB
@@ -16,10 +16,37 @@ from chromadb.config import Settings as ChromaSettings
 from llama_index.core import VectorStoreIndex, Document, StorageContext
 from llama_index.core.settings import Settings as LlamaSettings
 from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.embeddings.openai import OpenAIEmbedding
 
 from config import settings
 from models import MarketMatch
+
+
+def _get_embed_model():
+    """Get embedding model - uses HuggingFace (free) by default.
+
+    Falls back to OpenAI if configured and HuggingFace fails.
+    """
+    # Try HuggingFace first (free, no API key needed)
+    try:
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        return HuggingFaceEmbedding(
+            model_name="BAAI/bge-small-en-v1.5"  # Fast, good quality, ~130MB
+        )
+    except ImportError:
+        pass
+
+    # Fall back to OpenAI if available
+    if settings.openai_api_key:
+        from llama_index.embeddings.openai import OpenAIEmbedding
+        return OpenAIEmbedding(
+            model="text-embedding-3-small",
+            api_key=settings.openai_api_key
+        )
+
+    raise RuntimeError(
+        "No embedding model available. Install llama-index-embeddings-huggingface "
+        "or set OPENAI_API_KEY in .env"
+    )
 
 
 class LlamaIndexService:
@@ -73,11 +100,8 @@ class LlamaIndexService:
         # Create vector store from collection
         self.vector_store = ChromaVectorStore(chroma_collection=self.collection)
 
-        # Configure LlamaIndex to use OpenAI embeddings
-        LlamaSettings.embed_model = OpenAIEmbedding(
-            model="text-embedding-3-small",
-            api_key=settings.openai_api_key
-        )
+        # Configure LlamaIndex embeddings (HuggingFace by default, free & local)
+        LlamaSettings.embed_model = _get_embed_model()
 
         # Check if we have existing data
         if self.collection.count() > 0:

@@ -16,11 +16,18 @@ class Settings(BaseSettings):
     # Kalshi API Configuration
     kalshi_api_key_id: str
     kalshi_private_key_path: Path = Path("./keys/kalshi_private_key.pem")
-    kalshi_api_host: str = "https://api.elections.kalshi.com/trade-api/v2"
+    kalshi_demo_mode: bool = True  # Use demo API (fake money) by default
+
+    @property
+    def kalshi_api_host(self) -> str:
+        """Get Kalshi API host based on demo_mode setting."""
+        if self.kalshi_demo_mode:
+            return "https://demo-api.kalshi.co/trade-api/v2"
+        return "https://api.elections.kalshi.com/trade-api/v2"
 
     # LLM Configuration
     anthropic_api_key: str
-    openai_api_key: str  # Used for embeddings via LlamaIndex
+    openai_api_key: str = ""  # Optional - only needed if not using HuggingFace embeddings
 
     # Optional Services (for future features)
     tavily_api_key: str = ""
