@@ -298,6 +298,50 @@ app.add_middleware(
 
 
 # ============================================================
+# ERROR HANDLERS
+# ============================================================
+
+@app.exception_handler(GhostTokenError)
+async def ghost_token_error_handler(request: Request, exc: GhostTokenError):
+    """Handle ghost token validation errors."""
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "Token validation failed",
+            "detail": str(exc),
+            "code": "GHOST_TOKEN_ERROR"
+        }
+    )
+
+
+@app.exception_handler(KalshiError)
+async def kalshi_error_handler(request: Request, exc: KalshiError):
+    """Handle Kalshi API errors."""
+    return JSONResponse(
+        status_code=502,
+        content={
+            "error": "Kalshi API error",
+            "detail": str(exc),
+            "code": "KALSHI_ERROR"
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def general_error_handler(request: Request, exc: Exception):
+    """Handle unexpected errors."""
+    logger.exception(f"Unexpected error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": str(exc) if settings.debug else "An unexpected error occurred",
+            "code": "INTERNAL_ERROR"
+        }
+    )
+
+
+# ============================================================
 # HEALTH CHECK (Available even before full initialization)
 # ============================================================
 
@@ -365,6 +409,370 @@ def require_initialized(app_state) -> None:
             status_code=503,
             detail="Server not fully initialized. Try again shortly."
         )
+
+
+# ============================================================
+# CONVICTION ANALYSIS ENDPOINTS
+# ============================================================
+
+@app.post("/tools/analyze_conviction", response_model=ConvictionExtraction)
+async def analyze_conviction_endpoint(body: ConvictionRequest):
+    """Analyze a natural language statement for trading intent.
+
+    Extracts structured trading intent including:
+    - Whether statement contains a prediction
+    - Topic and side (YES/NO)
+    - Conviction level (0.0-1.0)
+    - Keywords for market search
+
+    This endpoint does NOT require full initialization as it only
+    uses the Anthropic API (no Kalshi/LlamaIndex needed).
+    """
+    try:
+        result = await analyze_conviction(body.statement)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ConvictionAnalysisError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+# ============================================================
+# MARKET SEARCH ENDPOINTS
+# ============================================================
+
+@app.post("/tools/search_markets", response_model=list[MarketMatch])
+async def search_markets_endpoint(request: Request, body: SearchMarketsRequest):
+    """Search for markets using semantic similarity.
+
+    Uses LlamaIndex vector store to find relevant markets.
+    Returns markets sorted by relevance score.
+    """
+    require_initialized(request.app.state)
+
+    try:
+        results = await search_markets(
+            query=body.query,
+            n_results=body.n_results,
+            category=body.category
+        )
+        return results
+    except MarketSearchError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/tools/get_market_details", response_model=MarketMatch)
+async def get_market_details_endpoint(request: Request, body: MarketDetailsRequest):
+    """Get fresh market details from Kalshi API.
+
+    Fetches live price data directly from Kalshi.
+    Use before trading to get current prices.
+    """
+    require_initialized(request.app.state)
+
+    try:
+        result = await get_market_details(body.ticker)
+        return result
+    except MarketNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except MarketSearchError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/tools/expand_and_search", response_model=list[MarketMatch])
+async def expand_and_search_endpoint(
+    request: Request,
+    body: ExpandAndSearchRequest
+):
+    """Expand conviction keywords and search for markets.
+
+    Combines direct keyword search with belief expansion
+    for more comprehensive market discovery.
+    """
+    require_initialized(request.app.state)
+
+    try:
+        results = await expand_and_search(
+            conviction=body.conviction,
+            n_results=5
+        )
+        return results
+    except MarketSearchError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/tools/index_stats")
+async def get_index_stats_endpoint(request: Request):
+    """Get statistics about the market index."""
+    require_initialized(request.app.state)
+
+    return get_index_stats()
+
+
+# ============================================================
+# TRADING ENDPOINTS
+# ============================================================
+
+@app.post("/tools/propose_trade", response_model=TradeProposal)
+async def propose_trade_endpoint(request: Request, body: ProposeTradeRequest):
+    """Create a trade proposal for user approval.
+
+    Calculates position sizing, profit/loss scenarios, and edge.
+    The proposal must be approved via execute_trade to actually trade.
+
+    IMPORTANT: This does NOT execute the trade. User must click
+    [APPROVE] in the UI to generate a ghost token for execution.
+    """
+    require_initialized(request.app.state)
+
+    try:
+        proposal = await propose_trade(
+            ticker=body.ticker,
+            title=body.title,
+            side=body.side,
+            limit_price=body.limit_price,
+            conviction=body.conviction,
+            reasoning=body.reasoning,
+            amount_usd=body.amount_usd
+        )
+        return proposal
+    except TradeValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/tools/execute_trade", response_model=ExecutedTrade)
+async def execute_trade_endpoint(request: Request, body: ExecuteTradeRequest):
+    """Execute an approved trade with ghost token validation.
+
+    SECURITY: Requires valid ghost token generated client-side
+    when user clicked [APPROVE]. Token is one-time use.
+
+    This is the ONLY way to execute trades. The agent cannot
+    call this endpoint successfully without user interaction.
+
+    Validation checks:
+    - trade_id must match a pending proposal
+    - token must be valid UUID format
+    - timestamp must be within TTL window (30 seconds)
+    - token must not have been used before (replay prevention)
+    """
+    require_initialized(request.app.state)
+
+    try:
+        result = await execute_trade(
+            trade_id=body.trade_id,
+            token=body.token,
+            timestamp=body.timestamp
+        )
+        return result
+    except GhostTokenError as e:
+        # Let the exception handler convert to 403
+        raise
+    except InsufficientBalanceError as e:
+        raise HTTPException(status_code=402, detail=str(e))
+    except TradingError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/tools/cancel_proposal", response_model=CancelResponse)
+async def cancel_proposal_endpoint(request: Request, body: CancelProposalRequest):
+    """Cancel a pending trade proposal.
+
+    Called when user clicks [REJECT] or proposal times out.
+    Removes the proposal from pending trades.
+    """
+    require_initialized(request.app.state)
+
+    success = await cancel_proposal(body.trade_id)
+    return CancelResponse(success=success, trade_id=body.trade_id)
+
+
+# ============================================================
+# PORTFOLIO & BALANCE ENDPOINTS
+# ============================================================
+
+@app.get("/tools/portfolio", response_model=PortfolioResponse)
+async def get_portfolio_endpoint(request: Request):
+    """Get current portfolio positions.
+
+    Returns all open positions with current values and P&L.
+    """
+    require_initialized(request.app.state)
+
+    try:
+        positions = await get_portfolio()
+
+        total_value = sum(p.current_value for p in positions) if positions else 0.0
+        total_pnl = sum(p.unrealized_pnl for p in positions) if positions else 0.0
+
+        return PortfolioResponse(
+            positions=positions,
+            total_value=round(total_value, 2),
+            total_pnl=round(total_pnl, 2)
+        )
+    except KalshiError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/tools/balance", response_model=BalanceResponse)
+async def get_balance_endpoint(request: Request):
+    """Get available account balance.
+
+    Returns balance in USD and count of pending proposals.
+    """
+    require_initialized(request.app.state)
+
+    try:
+        balance = await get_balance()
+        pending = get_pending_trades_count()
+
+        return BalanceResponse(
+            available_usd=round(balance, 2),
+            pending_trades=pending
+        )
+    except KalshiError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+# ============================================================
+# INDEX MANAGEMENT ENDPOINTS
+# ============================================================
+
+@app.post("/tools/refresh_index", response_model=RefreshResponse)
+async def refresh_index_endpoint(request: Request):
+    """Refresh the market index from Kalshi.
+
+    Fetches all open markets and rebuilds the vector index.
+    This may take 30-60 seconds depending on market count.
+
+    Use this to update the index with new markets or fresh prices.
+    """
+    require_initialized(request.app.state)
+
+    start = time.time()
+
+    try:
+        count = await refresh_market_index()
+        duration = time.time() - start
+
+        return RefreshResponse(
+            success=True,
+            markets_indexed=count,
+            duration_seconds=round(duration, 2)
+        )
+    except MarketSearchError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+# ============================================================
+# MCP TOOLS ENDPOINT
+# ============================================================
+
+@app.get("/mcp/tools", response_model=MCPToolsResponse)
+async def get_mcp_tools():
+    """Get MCP tool definitions for LLM consumption.
+
+    Returns structured tool definitions that can be used
+    by LLMs for function calling. Each tool includes:
+    - name: Tool identifier
+    - description: What the tool does
+    - parameters: JSON Schema for inputs
+    """
+    tools = [
+        ToolDefinition(
+            name="analyze_conviction",
+            description="Analyze a natural language statement for trading intent. Returns structured extraction with topic, side, conviction level, and keywords.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "statement": {
+                        "type": "string",
+                        "description": "The natural language statement to analyze"
+                    }
+                },
+                "required": ["statement"]
+            }
+        ),
+        ToolDefinition(
+            name="search_markets",
+            description="Search for Kalshi markets using semantic similarity. Returns relevant markets sorted by score.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query"
+                    },
+                    "n_results": {
+                        "type": "integer",
+                        "description": "Number of results to return (1-20)",
+                        "default": 5
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Optional category filter"
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        ToolDefinition(
+            name="get_market_details",
+            description="Get fresh market details from Kalshi API with current prices.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "Kalshi market ticker"
+                    }
+                },
+                "required": ["ticker"]
+            }
+        ),
+        ToolDefinition(
+            name="propose_trade",
+            description="Create a trade proposal for user approval. Does NOT execute the trade - user must approve first.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Market ticker"},
+                    "title": {"type": "string", "description": "Market title"},
+                    "side": {"type": "string", "enum": ["YES", "NO"], "description": "Trade side"},
+                    "limit_price": {"type": "integer", "minimum": 1, "maximum": 99, "description": "Price in cents"},
+                    "conviction": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence level"},
+                    "reasoning": {"type": "string", "description": "Why this trade"},
+                    "amount_usd": {"type": "number", "minimum": 1, "description": "Optional trade amount"}
+                },
+                "required": ["ticker", "title", "side", "limit_price", "conviction", "reasoning"]
+            }
+        ),
+        ToolDefinition(
+            name="execute_trade",
+            description="Execute an approved trade with ghost token validation. REQUIRES user approval via UI.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "trade_id": {"type": "string", "description": "Proposal trade ID"},
+                    "token": {"type": "string", "description": "Ghost token from UI"},
+                    "timestamp": {"type": "integer", "description": "Token generation timestamp"}
+                },
+                "required": ["trade_id", "token", "timestamp"]
+            }
+        ),
+        ToolDefinition(
+            name="get_portfolio",
+            description="Get current portfolio positions with values and P&L.",
+            parameters={"type": "object", "properties": {}}
+        ),
+        ToolDefinition(
+            name="get_balance",
+            description="Get available account balance in USD.",
+            parameters={"type": "object", "properties": {}}
+        )
+    ]
+
+    return MCPToolsResponse(tools=tools)
 
 
 # ============================================================
