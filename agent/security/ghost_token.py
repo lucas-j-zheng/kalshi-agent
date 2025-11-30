@@ -93,11 +93,13 @@ class GhostTokenValidator:
 
         Args:
             trade_details: Dict containing trade parameters (ticker, side, contracts, etc.)
+                          Must include 'trade_id' key.
 
         Returns:
             trade_id: UUID string identifying this proposal
         """
-        trade_id = str(uuid.uuid4())
+        # Use the trade_id from the proposal (don't generate a new one!)
+        trade_id = trade_details.get("trade_id") or str(uuid.uuid4())
         self.pending_trades[trade_id] = {
             **trade_details,
             "created_at": time.time()

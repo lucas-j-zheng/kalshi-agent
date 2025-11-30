@@ -179,6 +179,11 @@ class KalshiClient:
         positions = []
         for pos in positions_data:
             ticker = pos["ticker"]
+            contracts = abs(pos.get("position", 0))
+
+            # Skip closed positions (0 contracts)
+            if contracts == 0:
+                continue
 
             # Get current price for P&L calculation
             try:
@@ -190,7 +195,6 @@ class KalshiClient:
             except KalshiError:
                 current_price = 50  # Default if can't fetch
 
-            contracts = abs(pos.get("position", 0))
             avg_price = pos.get("average_price", 50)
 
             # Calculate value and P&L

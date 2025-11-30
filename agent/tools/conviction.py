@@ -1,7 +1,7 @@
 """Conviction extraction tool.
 
 This tool analyzes natural language statements and extracts structured
-trading intent using Claude. It identifies:
+trading intent using Claude or Groq (free alternative). It identifies:
 - Whether the statement expresses a prediction
 - The topic being predicted
 - The side (YES/NO)
@@ -10,9 +10,7 @@ trading intent using Claude. It identifies:
 """
 
 import json
-from typing import Optional
-
-from anthropic import Anthropic
+from typing import Optional, Union, Any
 
 from config import settings
 from models import ConvictionExtraction
@@ -20,15 +18,39 @@ from agent.prompts.conviction import format_conviction_prompt, CONVICTION_EXAMPL
 
 
 # Lazy initialization - client created on first use
-_client: Optional[Anthropic] = None
+_client: Optional[Any] = None
+_provider: Optional[str] = None  # "anthropic" or "groq"
 
 
-def _get_client() -> Anthropic:
-    """Get or create Anthropic client (lazy initialization)."""
-    global _client
+def _get_client() -> tuple[Any, str]:
+    """Get or create LLM client (lazy initialization).
+
+    Returns:
+        Tuple of (client, provider_name)
+    """
+    global _client, _provider
+
     if _client is None:
-        _client = Anthropic(api_key=settings.anthropic_api_key)
-    return _client
+        # Prefer Anthropic if available, otherwise use Groq (free)
+        if settings.anthropic_api_key:
+            from anthropic import Anthropic
+            _client = Anthropic(api_key=settings.anthropic_api_key)
+            _provider = "anthropic"
+        elif settings.groq_api_key:
+            from openai import OpenAI
+            _client = OpenAI(
+                api_key=settings.groq_api_key,
+                base_url="https://api.groq.com/openai/v1"
+            )
+            _provider = "groq"
+        else:
+            raise ValueError(
+                "No LLM API key configured. Set either:\n"
+                "  - ANTHROPIC_API_KEY (paid)\n"
+                "  - GROQ_API_KEY (free - get at https://console.groq.com)"
+            )
+
+    return _client, _provider
 
 
 class ConvictionAnalysisError(Exception):
@@ -144,7 +166,7 @@ def _build_messages(statement: str) -> list[dict]:
 async def analyze_conviction(statement: str) -> ConvictionExtraction:
     """Analyze a natural language statement for trading intent.
 
-    Uses Claude to extract structured trading intent from user statements
+    Uses Claude or Groq to extract structured trading intent from user statements
     like "I'm confident Bitcoin will hit 100k" or "Trump is definitely winning".
 
     Args:
@@ -171,19 +193,30 @@ async def analyze_conviction(statement: str) -> ConvictionExtraction:
     # Validate input
     _validate_input(statement)
 
-    client = _get_client()
+    client, provider = _get_client()
+    system_prompt = "You are a trading intent analyzer. Extract structured data from natural language statements about predictions and beliefs. Always respond with valid JSON only, no markdown."
 
     try:
-        # Call Claude with JSON mode
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            messages=_build_messages(statement),
-            system="You are a trading intent analyzer. Extract structured data from natural language statements about predictions and beliefs. Always respond with valid JSON only, no markdown."
-        )
-
-        # Extract response text
-        response_text = response.content[0].text.strip()
+        if provider == "anthropic":
+            # Anthropic API
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                messages=_build_messages(statement),
+                system=system_prompt
+            )
+            response_text = response.content[0].text.strip()
+        else:
+            # Groq API (OpenAI-compatible)
+            messages = [{"role": "system", "content": system_prompt}]
+            messages.extend(_build_messages(statement))
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",  # Free, fast, high quality
+                max_tokens=1024,
+                messages=messages,
+                temperature=0.1  # Low temp for consistent JSON
+            )
+            response_text = response.choices[0].message.content.strip()
 
         # Handle markdown code blocks if present
         if response_text.startswith("```"):
@@ -197,7 +230,7 @@ async def analyze_conviction(statement: str) -> ConvictionExtraction:
             data = json.loads(response_text)
         except json.JSONDecodeError as e:
             raise ConvictionAnalysisError(
-                f"Failed to parse Claude response as JSON: {e}\nResponse: {response_text[:200]}"
+                f"Failed to parse LLM response as JSON: {e}\nResponse: {response_text[:200]}"
             )
 
         # Validate and return

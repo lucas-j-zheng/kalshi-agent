@@ -26,8 +26,9 @@ class Settings(BaseSettings):
         return "https://api.elections.kalshi.com/trade-api/v2"
 
     # LLM Configuration
-    anthropic_api_key: str
+    anthropic_api_key: str = ""  # Optional - uses Groq if not set
     openai_api_key: str = ""  # Optional - only needed if not using HuggingFace embeddings
+    groq_api_key: str = ""  # Free alternative - get key at https://console.groq.com
 
     # Optional Services (for future features)
     tavily_api_key: str = ""

@@ -15,6 +15,10 @@ Requirements:
     - Kalshi API key and private key configured
 """
 
+import os
+# Suppress tokenizers parallelism warning when forking
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import argparse
 import asyncio
 import logging
@@ -49,8 +53,8 @@ def check_environment():
     if not settings.kalshi_api_key_id:
         errors.append("KALSHI_API_KEY_ID not set in .env")
 
-    if not settings.anthropic_api_key:
-        errors.append("ANTHROPIC_API_KEY not set in .env")
+    if not settings.anthropic_api_key and not settings.groq_api_key:
+        errors.append("No LLM API key set. Add ANTHROPIC_API_KEY or GROQ_API_KEY (free) to .env")
 
     # Check private key file
     try:
@@ -71,6 +75,8 @@ def check_environment():
     # Log configuration summary
     logger.info("Configuration loaded successfully")
     logger.info(f"  Kalshi API: {'DEMO' if settings.kalshi_demo_mode else 'PRODUCTION'}")
+    llm_provider = "Anthropic" if settings.anthropic_api_key else "Groq (free)"
+    logger.info(f"  LLM Provider: {llm_provider}")
     logger.info(f"  Max trade size: ${settings.max_trade_size_usd}")
     logger.info(f"  Ghost token TTL: {settings.ghost_token_ttl}s")
 
@@ -128,7 +134,9 @@ def wait_for_server(host: str, port: int, timeout: int = 30) -> bool:
     """
     import httpx
 
-    url = f"http://{host}:{port}/health"
+    # Use localhost for connection even if server binds to 0.0.0.0
+    connect_host = "localhost" if host == "0.0.0.0" else host
+    url = f"http://{connect_host}:{port}/health"
     start = time.time()
 
     while time.time() - start < timeout:
@@ -187,7 +195,8 @@ def main(
     elif frontend_only:
         # Just run the frontend (assumes server is already running)
         logger.info("Running in frontend-only mode")
-        logger.info(f"Connecting to API at http://{host}:{port}")
+        connect_host = "localhost" if host == "0.0.0.0" else host
+        logger.info(f"Connecting to API at http://{connect_host}:{port}")
 
         if not wait_for_server(host, port, timeout=5):
             logger.warning("API server not responding - frontend may not work correctly")
