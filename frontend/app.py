@@ -183,12 +183,6 @@ def format_market_interpretation(market: MarketMatch) -> str:
     """Generate human-readable interpretation of market odds."""
     yes_prob = market.yes_price
 
-    # Check for unreliable markets (low volume or 50/50 default pricing)
-    is_unreliable = market.volume < 100 or (yes_prob == 50 and market.no_price == 50)
-
-    if is_unreliable:
-        return "[LOW LIQUIDITY - odds unreliable]"
-
     # Determine confidence level description with tighter bands
     if yes_prob >= 85:
         confidence = "very likely"
@@ -204,6 +198,12 @@ def format_market_interpretation(market: MarketMatch) -> str:
         confidence = "unlikely"
     else:
         confidence = "very unlikely"
+
+    # Check for unreliable markets (low volume or 50/50 default pricing)
+    is_low_liquidity = market.volume < 100 or (yes_prob == 50 and market.no_price == 50)
+
+    if is_low_liquidity:
+        return f"{yes_prob}% chance ({confidence}) [LOW LIQUIDITY]"
 
     return f"{yes_prob}% chance ({confidence})"
 
