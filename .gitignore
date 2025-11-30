@@ -17,3 +17,5 @@ __pycache__/
 # Data (generated at runtime)
 data/chroma/
 data/*.db
+
+keys/

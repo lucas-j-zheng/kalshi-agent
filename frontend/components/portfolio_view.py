@@ -283,9 +283,11 @@ def create_portfolio_component():
         Tuple of (container, html_display, refresh_btn)
     """
     with gr.Group() as container:
+        # Gradio 6: padding default changed to False; we use inline CSS for padding
         html_display = gr.HTML(
             value=render_empty_portfolio_html(),
-            label="Portfolio"
+            label="Portfolio",
+            padding=False,
         )
         refresh_btn = gr.Button(
             "Refresh Portfolio",

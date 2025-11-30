@@ -399,7 +399,8 @@ def create_trade_card_component():
         Tuple of (container, html_display, approve_btn, reject_btn, trade_id_state)
     """
     with gr.Group(visible=False) as container:
-        html_display = gr.HTML(label="Trade Proposal")
+        # Gradio 6: padding default changed to False; we use inline CSS for padding
+        html_display = gr.HTML(label="Trade Proposal", padding=False)
 
         with gr.Row():
             approve_btn = gr.Button(

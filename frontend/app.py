@@ -16,6 +16,7 @@ clicks [APPROVE]. The agent cannot forge trade approvals.
 """
 
 import asyncio
+import re
 import time
 import uuid
 from typing import Optional, List, Tuple, Dict, Any
@@ -162,21 +163,88 @@ class AppState:
 # CHAT HANDLERS
 # ============================================================
 
+def parse_ticker_threshold(ticker: str) -> Optional[str]:
+    """Extract price threshold from ticker if present.
+
+    Examples:
+        KXBTCMAX150-25-DEC31-149999.99 -> $150,000
+        KXBTCMAXY-25-DEC31-224999.99 -> $225,000
+    """
+    # Look for price patterns like 149999.99, 224999.99, etc.
+    match = re.search(r'-(\d{5,})\.?\d*$', ticker)
+    if match:
+        price = float(match.group(1))
+        if price > 1000:
+            return f"${price/1000:,.0f}k" if price < 1000000 else f"${price:,.0f}"
+    return None
+
+
+def format_market_interpretation(market: MarketMatch) -> str:
+    """Generate human-readable interpretation of market odds."""
+    yes_prob = market.yes_price
+
+    # Check for unreliable markets (low volume or 50/50 default pricing)
+    is_unreliable = market.volume < 100 or (yes_prob == 50 and market.no_price == 50)
+
+    if is_unreliable:
+        return "[LOW LIQUIDITY - odds unreliable]"
+
+    # Determine confidence level description with tighter bands
+    if yes_prob >= 85:
+        confidence = "very likely"
+    elif yes_prob >= 65:
+        confidence = "likely"
+    elif yes_prob >= 55:
+        confidence = "leaning YES"
+    elif yes_prob >= 45:
+        confidence = "toss-up"
+    elif yes_prob >= 35:
+        confidence = "leaning NO"
+    elif yes_prob >= 15:
+        confidence = "unlikely"
+    else:
+        confidence = "very unlikely"
+
+    return f"{yes_prob}% chance ({confidence})"
+
+
 def format_markets_message(markets: List[MarketMatch]) -> str:
-    """Format markets list as a chat message."""
+    """Format markets list as a chat message with interpretation."""
     if not markets:
         return "I couldn't find any relevant markets. Try rephrasing your belief."
 
-    lines = ["I found these relevant markets:\n"]
+    lines = ["**Markets Found:**\n"]
+
     for i, market in enumerate(markets, 1):
+        # Format close date
+        close_str = market.close_time.strftime("%b %d, %Y")
+
+        # Interpret the odds
+        interpretation = format_market_interpretation(market)
+
         lines.append(
             f"**{i}. {market.title}**\n"
-            f"   - Ticker: `{market.ticker}`\n"
-            f"   - Current: YES @ {market.yes_price}c | NO @ {market.no_price}c\n"
-            f"   - Volume: {market.volume:,} contracts\n"
-            f"   - Relevance: {market.relevance_score*100:.0f}%\n"
+            f"   {interpretation}\n"
+            f"   Resolves: {close_str} | Volume: {market.volume:,}\n"
         )
-    lines.append("\n**Which market would you like to trade?** (Enter the number or ticker)")
+
+    # Find first reliable market for summary
+    reliable_market = None
+    for m in markets:
+        if m.volume >= 100 and not (m.yes_price == 50 and m.no_price == 50):
+            reliable_market = m
+            break
+
+    if reliable_market:
+        lines.append(
+            f"\n**Bottom line:** Market #1 has **{reliable_market.yes_price}% odds** of YES.\n"
+        )
+    else:
+        lines.append(
+            "\n**Warning:** Low liquidity - these odds may not reflect real market sentiment.\n"
+        )
+
+    lines.append("\n**Which market would you like to trade?** (Enter number)")
     return "\n".join(lines)
 
 
@@ -262,6 +330,11 @@ def process_message(
                 trade_card_html = render_trade_card_html(proposal)
                 trade_card_visible = True
                 trade_id = proposal.trade_id
+
+                # Debug logging
+                print(f"[DEBUG] Trade proposal created: {trade_id}")
+                print(f"[DEBUG] HTML length: {len(trade_card_html)} chars")
+                print(f"[DEBUG] Visible: {trade_card_visible}")
 
                 return history, state.to_dict(), trade_card_html, trade_card_visible, trade_id, None
 
@@ -508,9 +581,8 @@ def create_app() -> gr.Blocks:
     Returns:
         Configured Gradio Blocks app
     """
-    with gr.Blocks(
-        title="Kalshi Alpha Agent",
-    ) as app:
+    # Gradio 6: App-level parameters like theme, css moved to launch()
+    with gr.Blocks() as app:
         # State
         app_state = gr.State(value={})
         current_trade_id = gr.State(value=None)
@@ -538,7 +610,7 @@ def create_app() -> gr.Blocks:
                     height=500,
                     show_label=False,
                     container=True,
-                    # Gradio 6: messages format is now the default (and only option)
+                    # Gradio 6: type parameter removed; messages format is the only option
                 )
 
                 with gr.Row():
@@ -550,28 +622,31 @@ def create_app() -> gr.Blocks:
                     )
                     submit_btn = gr.Button("Send", variant="primary", scale=1)
 
-                # Trade card (initially hidden)
-                with gr.Group(visible=False) as trade_card_container:
-                    trade_card_html = gr.HTML()
-                    with gr.Row():
-                        approve_btn = gr.Button(
-                            "APPROVE",
-                            variant="primary",
-                            size="lg",
-                            scale=2
-                        )
-                        reject_btn = gr.Button(
-                            "REJECT",
-                            variant="secondary",
-                            size="lg",
-                            scale=1
-                        )
+                # Trade card section - HTML is always visible, buttons hidden until proposal
+                gr.Markdown("---")
+                gr.Markdown("### Trade Proposal")
+                trade_card_html = gr.HTML(value="<div style='color: #64748b; text-align: center; padding: 20px;'>Express a belief above to generate a trade proposal</div>")
+                with gr.Row(visible=False) as trade_buttons_row:
+                    approve_btn = gr.Button(
+                        "APPROVE",
+                        variant="primary",
+                        size="lg",
+                        scale=2,
+                    )
+                    reject_btn = gr.Button(
+                        "REJECT",
+                        variant="secondary",
+                        size="lg",
+                        scale=1,
+                    )
 
             # Right column - Portfolio
             with gr.Column(scale=1):
+                # Gradio 6: padding default changed to False; we use inline CSS for padding
                 portfolio_html = gr.HTML(
                     value=render_empty_portfolio_html(),
-                    label="Portfolio"
+                    label="Portfolio",
+                    padding=False,
                 )
                 refresh_portfolio_btn = gr.Button(
                     "Refresh Portfolio",
@@ -596,24 +671,55 @@ def create_app() -> gr.Blocks:
         def on_submit(message, history, state):
             """Handle message submission."""
             if not message.strip():
-                return history, state, "", False, None
+                return history, state, "", gr.Row(visible=False), None
 
             result = process_message(message, history, state)
-            return result[0], result[1], result[2], result[3], result[4]
+            # result = (history, state_dict, trade_card_html, visible, trade_id, _)
+            visible = result[3]
+            html_content = result[2]
+
+            # Debug logging
+            print(f"[DEBUG on_submit] visible={visible}, html_len={len(html_content) if html_content else 0}")
+
+            return (
+                result[0],  # history
+                result[1],  # state
+                html_content,  # trade_card_html content (string)
+                gr.Row(visible=visible),  # trade_buttons_row visibility
+                result[4],  # trade_id
+            )
 
         def on_approve(trade_id, state, history):
             """Handle approve button click."""
-            return handle_approve(trade_id, state, history)
+            result = handle_approve(trade_id, state, history)
+            # result = (history, state_dict, trade_card_html, visible, trade_id)
+            visible = result[3]
+            return (
+                result[0],  # history
+                result[1],  # state
+                result[2],  # trade_card_html content (string)
+                gr.Row(visible=visible),  # trade_buttons_row visibility
+                result[4],  # trade_id
+            )
 
         def on_reject(trade_id, state, history):
             """Handle reject button click."""
-            return handle_reject(trade_id, state, history)
+            result = handle_reject(trade_id, state, history)
+            # result = (history, state_dict, trade_card_html, visible, trade_id)
+            visible = result[3]
+            return (
+                result[0],  # history
+                result[1],  # state
+                result[2],  # trade_card_html content (string)
+                gr.Row(visible=visible),  # trade_buttons_row visibility
+                result[4],  # trade_id
+            )
 
         # Message submission
         msg_input.submit(
             fn=on_submit,
             inputs=[msg_input, chatbot, app_state],
-            outputs=[chatbot, app_state, trade_card_html, trade_card_container, current_trade_id]
+            outputs=[chatbot, app_state, trade_card_html, trade_buttons_row, current_trade_id]
         ).then(
             fn=lambda: "",
             outputs=msg_input
@@ -622,7 +728,7 @@ def create_app() -> gr.Blocks:
         submit_btn.click(
             fn=on_submit,
             inputs=[msg_input, chatbot, app_state],
-            outputs=[chatbot, app_state, trade_card_html, trade_card_container, current_trade_id]
+            outputs=[chatbot, app_state, trade_card_html, trade_buttons_row, current_trade_id]
         ).then(
             fn=lambda: "",
             outputs=msg_input
@@ -632,13 +738,13 @@ def create_app() -> gr.Blocks:
         approve_btn.click(
             fn=on_approve,
             inputs=[current_trade_id, app_state, chatbot],
-            outputs=[chatbot, app_state, trade_card_html, trade_card_container, current_trade_id]
+            outputs=[chatbot, app_state, trade_card_html, trade_buttons_row, current_trade_id]
         )
 
         reject_btn.click(
             fn=on_reject,
             inputs=[current_trade_id, app_state, chatbot],
-            outputs=[chatbot, app_state, trade_card_html, trade_card_container, current_trade_id]
+            outputs=[chatbot, app_state, trade_card_html, trade_buttons_row, current_trade_id]
         )
 
         # Portfolio refresh
@@ -663,7 +769,7 @@ def launch_app(host: str = None, port: int = None):
         host: Host to bind to (default: settings.host)
         port: Port to bind to (default: settings.port + 1)
     """
-    # Custom CSS (moved from Blocks to launch in Gradio 6)
+    # Gradio 6: App-level parameters (css, theme, js, head) moved from Blocks to launch()
     css = """
     .container { max-width: 1200px; margin: auto; }
     .chat-container { min-height: 400px; }
@@ -672,11 +778,15 @@ def launch_app(host: str = None, port: int = None):
     """
 
     app = create_app()
+    # Gradio 6: title can be set via head parameter or theme
+    # show_api replaced with footer_links parameter
     app.launch(
         server_name=host or settings.host,
         server_port=port or settings.port + 1,
         share=False,
         css=css,
+        # Gradio 6: Use footer_links instead of show_api
+        # footer_links=["gradio", "settings"],  # Omit "api" to hide API link
     )
 
 
