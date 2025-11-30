@@ -91,6 +91,7 @@ class TradeProposal(BaseModel):
     reasoning: str = Field(description="Why this trade was proposed")
     created_at: datetime
     expires_at: datetime = Field(description="When approval token expires")
+    close_time: Optional[datetime] = Field(default=None, description="When market resolves")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -156,6 +157,8 @@ class Position(BaseModel):
     current_price: int = Field(ge=1, le=99, description="Current market price")
     current_value: float = Field(ge=0, description="Current position value in USD")
     unrealized_pnl: float = Field(description="Unrealized profit/loss in USD")
+    close_time: Optional[datetime] = Field(default=None, description="When market resolves")
+    cost_basis: float = Field(default=0.0, description="Total cost paid for position in USD")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -166,7 +169,9 @@ class Position(BaseModel):
             "avg_price": 53,
             "current_price": 58,
             "current_value": 81.78,
-            "unrealized_pnl": 7.05
+            "unrealized_pnl": 7.05,
+            "close_time": "2024-11-05T23:59:59Z",
+            "cost_basis": 74.73
         }
     }}
 

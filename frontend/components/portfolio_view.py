@@ -43,47 +43,84 @@ def render_position_row(position: Position) -> str:
     side_color = "#3b82f6" if position.side == "YES" else "#f97316"
 
     # Calculate P&L percentage
-    cost_basis = position.contracts * position.avg_price / 100
+    cost_basis = position.cost_basis if position.cost_basis > 0 else (position.contracts * position.avg_price / 100)
     pnl_pct = (position.unrealized_pnl / cost_basis * 100) if cost_basis > 0 else 0
+
+    # Format resolution date
+    if position.close_time:
+        resolve_date = position.close_time.strftime("%b %d, %Y")
+    else:
+        resolve_date = "TBD"
+
+    # Calculate max payout if position wins (contracts pay $1 each)
+    max_payout = position.contracts  # $1 per contract if wins
 
     return f"""
     <div style="
         background: #1e293b;
         border-radius: 8px;
-        padding: 12px 16px;
-        margin-bottom: 8px;
-        display: grid;
-        grid-template-columns: 2fr 1fr 1fr 1fr;
-        gap: 12px;
-        align-items: center;
+        padding: 14px 16px;
+        margin-bottom: 10px;
     ">
-        <div>
-            <div style="font-size: 14px; font-weight: 500; color: #f1f5f9; margin-bottom: 2px;">
-                {position.title[:50]}{'...' if len(position.title) > 50 else ''}
+        <!-- Market Title & Position -->
+        <div style="margin-bottom: 10px;">
+            <div style="font-size: 14px; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; line-height: 1.3;">
+                {position.title}
             </div>
-            <div style="font-size: 11px; color: #64748b;">
-                {position.ticker}
-                <span style="color: {side_color}; font-weight: 500;">{position.side}</span>
+            <div style="font-size: 12px; color: #64748b;">
+                Position: <span style="color: {side_color}; font-weight: 600;">{position.contracts} {position.side}</span>
+                &nbsp;|&nbsp; Resolves: <span style="color: #94a3b8;">{resolve_date}</span>
             </div>
         </div>
-        <div style="text-align: right;">
-            <div style="font-size: 14px; font-weight: 500; color: #f1f5f9;">
-                {position.contracts}
+
+        <!-- Stats Grid -->
+        <div style="
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            background: #0f172a;
+            border-radius: 6px;
+            padding: 10px;
+        ">
+            <div style="text-align: center;">
+                <div style="font-size: 11px; color: #64748b; margin-bottom: 2px;">Cost Basis</div>
+                <div style="font-size: 14px; font-weight: 500; color: #f1f5f9;">
+                    ${cost_basis:.2f}
+                </div>
             </div>
-            <div style="font-size: 11px; color: #64748b;">contracts</div>
+            <div style="text-align: center;">
+                <div style="font-size: 11px; color: #64748b; margin-bottom: 2px;">Current Value</div>
+                <div style="font-size: 14px; font-weight: 500; color: #f1f5f9;">
+                    ${position.current_value:.2f}
+                </div>
+            </div>
+            <div style="text-align: center;">
+                <div style="font-size: 11px; color: #64748b; margin-bottom: 2px;">If Wins</div>
+                <div style="font-size: 14px; font-weight: 500; color: #22c55e;">
+                    ${max_payout:.2f}
+                </div>
+            </div>
         </div>
-        <div style="text-align: right;">
-            <div style="font-size: 14px; font-weight: 500; color: #f1f5f9;">
-                {position.avg_price}c &#x2192; {position.current_price}c
+
+        <!-- P&L Bar -->
+        <div style="
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 10px;
+            padding-top: 8px;
+            border-top: 1px solid #334155;
+        ">
+            <div style="font-size: 12px; color: #64748b;">
+                {position.avg_price}c avg &#x2192; {position.current_price}c now
             </div>
-            <div style="font-size: 11px; color: #64748b;">avg &#x2192; current</div>
-        </div>
-        <div style="text-align: right;">
-            <div style="font-size: 14px; font-weight: 600; color: {pnl_color};">
-                {format_currency(position.unrealized_pnl, include_sign=True)}
-            </div>
-            <div style="font-size: 11px; color: {pnl_color};">
-                {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%
+            <div style="text-align: right;">
+                <span style="font-size: 14px; font-weight: 600; color: {pnl_color};">
+                    {format_currency(position.unrealized_pnl, include_sign=True)}
+                </span>
+                <span style="font-size: 12px; color: {pnl_color}; margin-left: 4px;">
+                    ({'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%)
+                </span>
             </div>
         </div>
     </div>
@@ -188,22 +225,15 @@ def render_portfolio_html(
             </div>
         </div>
 
-        <!-- Column Headers -->
+        <!-- Positions Header -->
         {'''
         <div style="
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 1fr;
-            gap: 12px;
-            padding: 8px 16px;
-            font-size: 11px;
+            padding: 8px 0 4px 0;
+            font-size: 12px;
             color: #64748b;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-weight: 500;
         ">
-            <div>Market</div>
-            <div style="text-align: right;">Size</div>
-            <div style="text-align: right;">Price</div>
-            <div style="text-align: right;">P&amp;L</div>
+            Open Positions
         </div>
         ''' if positions else ''}
 

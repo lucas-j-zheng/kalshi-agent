@@ -125,6 +125,15 @@ if STANDALONE_MODE:
             if stats["count"] == 0:
                 logger.info("Index empty, fetching markets from Kalshi...")
                 all_markets = _kalshi_client.get_all_markets(status="open")
+
+                # On HF Spaces (limited resources), only index top markets by volume
+                # to avoid 30+ minute startup times
+                max_markets = int(os.environ.get("MAX_INDEX_MARKETS", "5000"))
+                if len(all_markets) > max_markets:
+                    logger.info(f"Limiting to top {max_markets} markets by volume (of {len(all_markets)} total)")
+                    # Sort by volume descending and take top N
+                    all_markets = sorted(all_markets, key=lambda m: m.get("volume", 0), reverse=True)[:max_markets]
+
                 logger.info(f"Indexing {len(all_markets)} markets...")
                 _llama_service.index_markets(all_markets)
                 logger.info("Market index populated.")
@@ -201,7 +210,8 @@ def call_propose_trade(
     side: str,
     limit_price: int,
     conviction: float,
-    reasoning: str
+    reasoning: str,
+    close_time: Optional[datetime] = None
 ) -> Dict[str, Any]:
     """Propose trade - direct or via API."""
     if STANDALONE_MODE:
@@ -212,19 +222,23 @@ def call_propose_trade(
                 side=side,
                 limit_price=limit_price,
                 conviction=conviction,
-                reasoning=reasoning
+                reasoning=reasoning,
+                close_time=close_time
             )
         )
         return result.model_dump()
     else:
-        return _api_call("POST", "/tools/propose_trade", {
+        data = {
             "ticker": ticker,
             "title": title,
             "side": side,
             "limit_price": limit_price,
             "conviction": conviction,
             "reasoning": reasoning
-        })
+        }
+        if close_time:
+            data["close_time"] = close_time.isoformat()
+        return _api_call("POST", "/tools/propose_trade", data)
 
 
 def call_execute_trade(trade_id: str, token: str, timestamp: int) -> Dict[str, Any]:
@@ -513,7 +527,8 @@ def process_message(
                     side=state.current_conviction.side,
                     limit_price=fresh_market.yes_price if state.current_conviction.side == "YES" else fresh_market.no_price,
                     conviction=state.current_conviction.conviction,
-                    reasoning=f"Based on your belief: {state.current_conviction.topic}"
+                    reasoning=f"Based on your belief: {state.current_conviction.topic}",
+                    close_time=fresh_market.close_time
                 )
                 proposal = TradeProposal(**proposal_data)
                 state.current_proposal = proposal

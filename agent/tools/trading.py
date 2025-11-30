@@ -143,7 +143,8 @@ async def propose_trade(
     limit_price: int,
     conviction: float,
     reasoning: str,
-    amount_usd: Optional[float] = None
+    amount_usd: Optional[float] = None,
+    close_time: Optional[datetime] = None
 ) -> TradeProposal:
     """Create a trade proposal for user approval.
 
@@ -250,7 +251,8 @@ async def propose_trade(
         edge=round(edge, 4),
         reasoning=reasoning,
         created_at=now,
-        expires_at=expires_at
+        expires_at=expires_at,
+        close_time=close_time
     )
 
     # Register with ghost token validator

@@ -114,7 +114,10 @@ def render_trade_card_html(proposal: TradeProposal) -> str:
         ">
             <div style="font-size: 14px; color: #94a3b8; margin-bottom: 4px;">Market</div>
             <div style="font-size: 16px; font-weight: 500; color: #f1f5f9;">{proposal.title}</div>
-            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">{proposal.ticker}</div>
+            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
+                {proposal.ticker}
+                {f' | Resolves: {proposal.close_time.strftime("%b %d, %Y")}' if proposal.close_time else ''}
+            </div>
         </div>
 
         <!-- Position Details -->

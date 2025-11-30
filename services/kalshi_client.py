@@ -9,6 +9,7 @@ Handles all interactions with the Kalshi prediction market:
 import httpx
 import time
 import base64
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 from cryptography.hazmat.primitives import hashes, serialization
@@ -16,6 +17,8 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 from models import MarketMatch, Position
 
 
@@ -185,13 +188,18 @@ class KalshiClient:
             if contracts == 0:
                 continue
 
-            # Get current price for P&L calculation
+            # Get current price and market details for P&L calculation
+            market = None
+            close_time = None
+            market_title = pos.get("market_title", ticker)
             try:
                 market = self.get_market(ticker)
                 current_price = (
                     market.yes_price if pos.get("position", 0) > 0
                     else market.no_price
                 )
+                close_time = market.close_time
+                market_title = market.title  # Use full title from market
             except KalshiError:
                 current_price = 50  # Default if can't fetch
 
@@ -204,13 +212,15 @@ class KalshiClient:
 
             positions.append(Position(
                 ticker=ticker,
-                title=pos.get("market_title", ticker),
+                title=market_title,
                 side="YES" if pos.get("position", 0) > 0 else "NO",
                 contracts=contracts,
                 avg_price=avg_price,
                 current_price=current_price,
                 current_value=current_value,
-                unrealized_pnl=unrealized_pnl
+                unrealized_pnl=unrealized_pnl,
+                close_time=close_time,
+                cost_basis=cost_basis
             ))
 
         return positions
