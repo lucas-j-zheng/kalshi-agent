@@ -291,6 +291,60 @@ class KalshiClient:
 
         return all_markets
 
+    def get_event(self, event_ticker: str) -> list[MarketMatch]:
+        """Get all markets in an event by event ticker.
+
+        Used for multi-outcome markets (e.g., "Who will win MVP?") where
+        each option is a separate market sharing the same event_ticker.
+
+        Args:
+            event_ticker: Event ticker (e.g., "NBAFINALSMVP-2027")
+
+        Returns:
+            List of MarketMatch objects for all markets in the event,
+            sorted by yes_price descending (highest probability first)
+        """
+        response = self._request("GET", f"/events/{event_ticker}", json={"with_nested_markets": "true"})
+        event = response.get("event", {})
+        markets_data = event.get("markets", [])
+
+        markets = []
+        for market in markets_data:
+            # Parse close_time
+            close_time_str = market.get("close_time", "")
+            try:
+                close_time = datetime.fromisoformat(
+                    close_time_str.replace("Z", "+00:00")
+                )
+            except (ValueError, TypeError):
+                close_time = datetime.now(timezone.utc)
+
+            # Use ASK prices for buying
+            yes_price = market.get("yes_ask", 50) or market.get("yes_bid", 50) or 50
+            no_price = market.get("no_ask", 50) or market.get("no_bid", 50) or 50
+            yes_price = max(1, min(99, yes_price))
+            no_price = max(1, min(99, no_price))
+
+            # Get subtitle - prefer yes_sub_title for multi-outcome markets
+            subtitle = market.get("subtitle") or market.get("yes_sub_title", "")
+
+            markets.append(MarketMatch(
+                ticker=market["ticker"],
+                event_ticker=event_ticker,
+                title=market.get("title", ""),
+                subtitle=subtitle,
+                category=event.get("category", ""),
+                yes_price=yes_price,
+                no_price=no_price,
+                volume=market.get("volume", 0),
+                close_time=close_time,
+                relevance_score=0.0
+            ))
+
+        # Sort by probability (yes_price) descending
+        markets.sort(key=lambda m: m.yes_price, reverse=True)
+        return markets
+
     def get_market(self, ticker: str) -> MarketMatch:
         """Get single market by ticker with current prices.
 
@@ -322,10 +376,14 @@ class KalshiClient:
         yes_price = max(1, min(99, yes_price))
         no_price = max(1, min(99, no_price))
 
+        # Get subtitle - prefer yes_sub_title for multi-outcome markets (e.g., "LeBron James")
+        subtitle = market.get("subtitle") or market.get("yes_sub_title", "")
+
         return MarketMatch(
             ticker=market["ticker"],
+            event_ticker=market.get("event_ticker", ""),
             title=market.get("title", ""),
-            subtitle=market.get("subtitle", ""),
+            subtitle=subtitle,
             category=market.get("category", ""),
             yes_price=yes_price,
             no_price=no_price,

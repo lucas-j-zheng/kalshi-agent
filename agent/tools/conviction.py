@@ -10,11 +10,14 @@ trading intent using Claude or Groq (free alternative). It identifies:
 """
 
 import json
+import logging
 from typing import Optional, Union, Any
 
 from config import settings
 from models import ConvictionExtraction
 from agent.prompts.conviction import format_conviction_prompt, CONVICTION_EXAMPLES
+
+logger = logging.getLogger(__name__)
 
 
 # Lazy initialization - client created on first use
@@ -33,17 +36,25 @@ def _get_client() -> tuple[Any, str]:
     if _client is None:
         # Prefer Anthropic if available, otherwise use Groq (free)
         if settings.anthropic_api_key:
+            key = settings.anthropic_api_key
+            logger.info(f"Using Anthropic API for conviction analysis (key: {key[:8]}...{key[-4:]})")
             from anthropic import Anthropic
-            _client = Anthropic(api_key=settings.anthropic_api_key)
+            _client = Anthropic(api_key=key)
             _provider = "anthropic"
         elif settings.groq_api_key:
+            key = settings.groq_api_key
+            logger.info(f"Using Groq API for conviction analysis (key: {key[:8]}...{key[-4:]})")
             from openai import OpenAI
+            import httpx
             _client = OpenAI(
-                api_key=settings.groq_api_key,
-                base_url="https://api.groq.com/openai/v1"
+                api_key=key,
+                base_url="https://api.groq.com/openai/v1",
+                timeout=httpx.Timeout(60.0, connect=10.0),
+                max_retries=2
             )
             _provider = "groq"
         else:
+            logger.error("No LLM API key configured!")
             raise ValueError(
                 "No LLM API key configured. Set either:\n"
                 "  - ANTHROPIC_API_KEY (paid)\n"
@@ -239,7 +250,8 @@ async def analyze_conviction(statement: str) -> ConvictionExtraction:
     except Exception as e:
         if isinstance(e, (ValueError, ConvictionAnalysisError)):
             raise
-        raise ConvictionAnalysisError(f"Conviction analysis failed: {e}")
+        logger.error(f"LLM API call failed ({provider}): {type(e).__name__}: {e}")
+        raise ConvictionAnalysisError(f"Conviction analysis failed: {type(e).__name__}: {e}")
 
 
 def analyze_conviction_sync(statement: str) -> ConvictionExtraction:

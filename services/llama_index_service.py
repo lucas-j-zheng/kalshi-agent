@@ -140,10 +140,14 @@ class LlamaIndexService:
         # Create documents from markets
         documents = []
         for market in markets:
-            # Combine searchable text
+            # Get subtitle - prefer yes_sub_title for multi-outcome markets (e.g., "LeBron James")
+            subtitle = market.get('subtitle') or market.get('yes_sub_title', '')
+
+            # Combine searchable text (include yes_sub_title for player name searches)
             text = f"""
             {market.get('title', '')}
-            {market.get('subtitle', '')}
+            {subtitle}
+            {market.get('yes_sub_title', '')}
             Category: {market.get('category', '')}
             {market.get('rules_primary', '')}
             """.strip()
@@ -172,8 +176,9 @@ class LlamaIndexService:
                 doc_id=market['ticker'],
                 metadata={
                     'ticker': market['ticker'],
+                    'event_ticker': market.get('event_ticker', ''),
                     'title': market.get('title', ''),
-                    'subtitle': market.get('subtitle', ''),
+                    'subtitle': subtitle,
                     'category': market.get('category', ''),
                     'yes_price': yes_price,
                     'no_price': no_price,
@@ -261,6 +266,7 @@ class LlamaIndexService:
 
             results.append(MarketMatch(
                 ticker=meta['ticker'],
+                event_ticker=meta.get('event_ticker', ''),
                 title=meta.get('title', ''),
                 subtitle=meta.get('subtitle', ''),
                 category=meta.get('category', ''),
@@ -316,6 +322,7 @@ class LlamaIndexService:
 
         return MarketMatch(
             ticker=meta['ticker'],
+            event_ticker=meta.get('event_ticker', ''),
             title=meta.get('title', ''),
             subtitle=meta.get('subtitle', ''),
             category=meta.get('category', ''),

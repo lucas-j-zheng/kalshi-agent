@@ -144,7 +144,8 @@ async def propose_trade(
     conviction: float,
     reasoning: str,
     amount_usd: Optional[float] = None,
-    close_time: Optional[datetime] = None
+    close_time: Optional[datetime] = None,
+    subtitle: str = ""
 ) -> TradeProposal:
     """Create a trade proposal for user approval.
 
@@ -240,6 +241,7 @@ async def propose_trade(
         trade_id=trade_id,
         ticker=ticker,
         title=title,
+        subtitle=subtitle,
         side=side,
         contracts=contracts,
         limit_price=limit_price,

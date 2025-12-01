@@ -134,22 +134,42 @@ def wait_for_server(host: str, port: int, timeout: int = 30) -> bool:
     """
     import httpx
 
-    # Use localhost for connection even if server binds to 0.0.0.0
-    connect_host = "localhost" if host == "0.0.0.0" else host
+    # Use 127.0.0.1 to avoid DNS resolution issues with localhost
+    connect_host = "127.0.0.1" if host == "0.0.0.0" else host
     url = f"http://{connect_host}:{port}/health"
     start = time.time()
+    last_status = None
+    check_count = 0
+
+    logger.info(f"Polling {url} for health status...")
 
     while time.time() - start < timeout:
+        check_count += 1
         try:
-            response = httpx.get(url, timeout=2.0)
+            response = httpx.get(url, timeout=5.0)
             if response.status_code == 200:
                 data = response.json()
-                if data.get("status") in ["healthy", "degraded"]:
+                status = data.get("status")
+                if status != last_status:
+                    logger.info(f"Health check #{check_count}: {status} (kalshi={data.get('kalshi_connected')}, index={data.get('index_ready')}, markets={data.get('markets_indexed')})")
+                    last_status = status
+                if status in ["healthy", "degraded"]:
                     return True
-        except Exception:
-            pass
+            else:
+                if last_status != f"HTTP_{response.status_code}":
+                    logger.warning(f"Health check #{check_count}: HTTP {response.status_code}")
+                    last_status = f"HTTP_{response.status_code}"
+        except httpx.ConnectError:
+            # Server not yet listening - this is expected during startup
+            if check_count % 20 == 1:  # Log every 10 seconds
+                logger.info(f"Health check #{check_count}: waiting for server to start...")
+        except Exception as e:
+            if last_status != "error":
+                logger.warning(f"Health check #{check_count} failed: {type(e).__name__}: {e}")
+                last_status = "error"
         time.sleep(0.5)
 
+    logger.error(f"Health check timed out after {check_count} attempts")
     return False
 
 

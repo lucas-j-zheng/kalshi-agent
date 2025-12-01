@@ -90,6 +90,7 @@ if STANDALONE_MODE:
         cancel_proposal as _cancel_proposal,
         get_portfolio as _get_portfolio,
         get_balance as _get_balance,
+        get_pending_trades_count as _get_pending_trades_count,
         init_market_services,
         init_trading_services,
     )
@@ -174,9 +175,7 @@ if STANDALONE_MODE:
 def call_analyze_conviction(statement: str) -> Dict[str, Any]:
     """Analyze conviction - direct or via API."""
     if STANDALONE_MODE:
-        result = asyncio.get_event_loop().run_until_complete(
-            _analyze_conviction(statement)
-        )
+        result = asyncio.run(_analyze_conviction(statement))
         return result.model_dump()
     else:
         return _api_call("POST", "/tools/analyze_conviction", {"statement": statement})
@@ -185,9 +184,7 @@ def call_analyze_conviction(statement: str) -> Dict[str, Any]:
 def call_search_markets(query: str, n_results: int = 5) -> List[Dict[str, Any]]:
     """Search markets - direct or via API."""
     if STANDALONE_MODE:
-        results = asyncio.get_event_loop().run_until_complete(
-            _search_markets(query, n_results=n_results)
-        )
+        results = asyncio.run(_search_markets(query, n_results=n_results))
         return [r.model_dump() for r in results]
     else:
         return _api_call("POST", "/tools/search_markets", {"query": query, "n_results": n_results})
@@ -196,9 +193,7 @@ def call_search_markets(query: str, n_results: int = 5) -> List[Dict[str, Any]]:
 def call_get_market_details(ticker: str) -> Dict[str, Any]:
     """Get market details - direct or via API."""
     if STANDALONE_MODE:
-        result = asyncio.get_event_loop().run_until_complete(
-            _get_market_details(ticker)
-        )
+        result = asyncio.run(_get_market_details(ticker))
         return result.model_dump()
     else:
         return _api_call("POST", "/tools/get_market_details", {"ticker": ticker})
@@ -211,11 +206,12 @@ def call_propose_trade(
     limit_price: int,
     conviction: float,
     reasoning: str,
-    close_time: Optional[datetime] = None
+    close_time: Optional[datetime] = None,
+    subtitle: str = ""
 ) -> Dict[str, Any]:
     """Propose trade - direct or via API."""
     if STANDALONE_MODE:
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             _propose_trade(
                 ticker=ticker,
                 title=title,
@@ -223,7 +219,8 @@ def call_propose_trade(
                 limit_price=limit_price,
                 conviction=conviction,
                 reasoning=reasoning,
-                close_time=close_time
+                close_time=close_time,
+                subtitle=subtitle
             )
         )
         return result.model_dump()
@@ -234,7 +231,8 @@ def call_propose_trade(
             "side": side,
             "limit_price": limit_price,
             "conviction": conviction,
-            "reasoning": reasoning
+            "reasoning": reasoning,
+            "subtitle": subtitle
         }
         if close_time:
             data["close_time"] = close_time.isoformat()
@@ -244,7 +242,7 @@ def call_propose_trade(
 def call_execute_trade(trade_id: str, token: str, timestamp: int) -> Dict[str, Any]:
     """Execute trade - direct or via API."""
     if STANDALONE_MODE:
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             _execute_trade(trade_id=trade_id, token=token, timestamp=timestamp)
         )
         return result.model_dump()
@@ -259,9 +257,7 @@ def call_execute_trade(trade_id: str, token: str, timestamp: int) -> Dict[str, A
 def call_cancel_proposal(trade_id: str) -> Dict[str, Any]:
     """Cancel proposal - direct or via API."""
     if STANDALONE_MODE:
-        result = asyncio.get_event_loop().run_until_complete(
-            _cancel_proposal(trade_id)
-        )
+        result = asyncio.run(_cancel_proposal(trade_id))
         return {"success": result, "trade_id": trade_id}
     else:
         return _api_call("POST", "/tools/cancel_proposal", {"trade_id": trade_id})
@@ -270,13 +266,13 @@ def call_cancel_proposal(trade_id: str) -> Dict[str, Any]:
 def call_get_portfolio() -> Dict[str, Any]:
     """Get portfolio - direct or via API."""
     if STANDALONE_MODE:
-        positions, total_value, total_pnl = asyncio.get_event_loop().run_until_complete(
-            _get_portfolio()
-        )
+        positions = asyncio.run(_get_portfolio())
+        total_value = sum(p.current_value for p in positions) if positions else 0.0
+        total_pnl = sum(p.unrealized_pnl for p in positions) if positions else 0.0
         return {
             "positions": [p.model_dump() for p in positions],
-            "total_value": total_value,
-            "total_pnl": total_pnl
+            "total_value": round(total_value, 2),
+            "total_pnl": round(total_pnl, 2)
         }
     else:
         return _api_call("GET", "/tools/portfolio")
@@ -285,8 +281,9 @@ def call_get_portfolio() -> Dict[str, Any]:
 def call_get_balance() -> Dict[str, Any]:
     """Get balance - direct or via API."""
     if STANDALONE_MODE:
-        balance = asyncio.get_event_loop().run_until_complete(_get_balance())
-        return {"available_usd": balance, "pending_trades": 0}
+        balance = asyncio.run(_get_balance())
+        pending = _get_pending_trades_count()
+        return {"available_usd": round(balance, 2), "pending_trades": pending}
     else:
         return _api_call("GET", "/tools/balance")
 
@@ -418,27 +415,109 @@ def format_market_interpretation(market: MarketMatch) -> str:
     return f"{yes_prob}% chance by {close_date} ({confidence}){liquidity_warning}"
 
 
-def format_markets_message(markets: List[MarketMatch]) -> str:
-    """Format markets list as a chat message with interpretation."""
+def is_multi_outcome_market(market: MarketMatch) -> bool:
+    """Check if a market is part of a multi-outcome event.
+
+    Multi-outcome markets have an event_ticker that differs from their ticker,
+    indicating multiple markets share the same event (e.g., "Who will win MVP?"
+    with separate markets for each player).
+    """
+    return (
+        hasattr(market, 'event_ticker') and
+        market.event_ticker and
+        market.event_ticker != market.ticker and
+        market.event_ticker != ""
+    )
+
+
+def format_multi_outcome_options(event_markets: List[MarketMatch], max_options: int = 5) -> str:
+    """Format options for a multi-outcome market.
+
+    Args:
+        event_markets: All markets in the event, sorted by yes_price desc
+        max_options: Maximum options to display
+
+    Returns:
+        Formatted string showing top options with probabilities
+    """
+    lines = []
+    shown = 0
+    for m in event_markets:
+        if shown >= max_options:
+            remaining = len(event_markets) - max_options
+            if remaining > 0:
+                lines.append(f"   ... and {remaining} more options")
+            break
+
+        # Use subtitle as option name, fallback to ticker suffix
+        option_name = m.subtitle or m.ticker.split("-")[-1]
+        lines.append(f"   - {option_name}: **{m.yes_price}%**")
+        shown += 1
+
+    return "\n".join(lines)
+
+
+def format_markets_message(markets: List[MarketMatch], kalshi_client=None) -> str:
+    """Format markets list as a chat message with interpretation.
+
+    For multi-outcome markets, fetches and displays all options.
+    """
     if not markets:
         return "I couldn't find any relevant markets. Try rephrasing your belief."
 
     lines = ["**Markets Found:**\n"]
 
-    for i, market in enumerate(markets, 1):
-        # Interpret the odds (includes date)
+    # Track which event_tickers we've already displayed to avoid duplicates
+    shown_events = set()
+    display_num = 0
+
+    for market in markets:
+        # Check if this is a multi-outcome market
+        if is_multi_outcome_market(market):
+            # Skip if we've already shown this event
+            if market.event_ticker in shown_events:
+                continue
+            shown_events.add(market.event_ticker)
+
+            # Try to fetch all options for this event
+            event_markets = None
+            if kalshi_client:
+                try:
+                    event_markets = kalshi_client.get_event(market.event_ticker)
+                except Exception:
+                    pass  # Fall back to showing just the single market
+
+            if event_markets and len(event_markets) > 1:
+                # Multi-outcome: show all options
+                display_num += 1
+                close_date = market.close_time.strftime("%b %d, %Y")
+                total_volume = sum(m.volume for m in event_markets)
+                is_low_liquidity = total_volume < 2000
+
+                lines.append(f"**{display_num}. {market.title}**")
+                lines.append(f"   Closes: {close_date} | Vol: {total_volume:,}" +
+                           (" [LOW LIQUIDITY]" if is_low_liquidity else ""))
+                lines.append(format_multi_outcome_options(event_markets))
+                lines.append("")
+                continue
+
+        # Binary market (or couldn't fetch event)
+        display_num += 1
         interpretation = format_market_interpretation(market)
 
-        # Add threshold to title if it's not already mentioned
+        # Build title with subtitle for multi-outcome markets
         title = market.title
-        threshold = parse_ticker_threshold(market.ticker)
-        if threshold:
-            # Check if title already contains a price (has $ in it)
-            if "$" not in title:
+        if market.subtitle and is_multi_outcome_market(market):
+            # Show option name for multi-outcome markets (e.g., "Who will win MVP? - LeBron James")
+            title = f"{market.title} - **{market.subtitle}**"
+        else:
+            # Add threshold to title if it's not already mentioned
+            threshold = parse_ticker_threshold(market.ticker)
+            if threshold and "$" not in title:
                 title = f"{title} (>{threshold})"
 
         lines.append(
-            f"**{i}. {title}**\n"
+            f"**{display_num}. {title}**\n"
             f"   {interpretation} | Vol: {market.volume:,}\n"
         )
 
@@ -451,9 +530,12 @@ def format_markets_message(markets: List[MarketMatch]) -> str:
             break
 
     if reliable_market:
-        lines.append(
-            f"\n**Bottom line:** Market #1 has **{reliable_market.yes_price}% odds** of YES.\n"
-        )
+        if is_multi_outcome_market(reliable_market):
+            lines.append(f"\n**Bottom line:** See options above for market #1.\n")
+        else:
+            lines.append(
+                f"\n**Bottom line:** Market #1 has **{reliable_market.yes_price}% odds** of YES.\n"
+            )
     else:
         lines.append(
             "\n**Warning:** Low liquidity - these odds may not reflect real market sentiment.\n"
@@ -528,7 +610,8 @@ def process_message(
                     limit_price=fresh_market.yes_price if state.current_conviction.side == "YES" else fresh_market.no_price,
                     conviction=state.current_conviction.conviction,
                     reasoning=f"Based on your belief: {state.current_conviction.topic}",
-                    close_time=fresh_market.close_time
+                    close_time=fresh_market.close_time,
+                    subtitle=fresh_market.subtitle
                 )
                 proposal = TradeProposal(**proposal_data)
                 state.current_proposal = proposal
@@ -575,8 +658,9 @@ def process_message(
         markets = [MarketMatch(**m) for m in markets_data]
         state.available_markets = markets
 
-        # Add markets message
-        history.append({"role": "assistant", "content": format_markets_message(markets)})
+        # Add markets message (pass kalshi_client for multi-outcome market expansion)
+        kalshi = _kalshi_client if STANDALONE_MODE else None
+        history.append({"role": "assistant", "content": format_markets_message(markets, kalshi_client=kalshi)})
 
         return history, state.to_dict(), "", False, None, None
 

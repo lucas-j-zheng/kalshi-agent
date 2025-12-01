@@ -103,6 +103,7 @@ class ProposeTradeRequest(BaseModel):
     """Request to create a trade proposal."""
     ticker: str = Field(..., min_length=1, max_length=50)
     title: str = Field(..., min_length=1, max_length=500)
+    subtitle: str = Field(default="", max_length=200, description="Option name for multi-outcome markets")
     side: Literal["YES", "NO"]
     limit_price: int = Field(..., ge=1, le=99)
     conviction: float = Field(..., ge=0.0, le=1.0)
@@ -533,7 +534,8 @@ async def propose_trade_endpoint(request: Request, body: ProposeTradeRequest):
             limit_price=body.limit_price,
             conviction=body.conviction,
             reasoning=body.reasoning,
-            amount_usd=body.amount_usd
+            amount_usd=body.amount_usd,
+            subtitle=body.subtitle
         )
         return proposal
     except TradeValidationError as e:

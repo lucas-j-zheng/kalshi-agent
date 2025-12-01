@@ -43,6 +43,7 @@ class MarketMatch(BaseModel):
     Prices are in cents (1-99) representing probability.
     """
     ticker: str = Field(description="Kalshi market ticker, e.g., 'PRES-2024-DJT'")
+    event_ticker: str = Field(default="", description="Event ticker for multi-outcome markets")
     title: str = Field(description="Market question, e.g., 'Will Trump win?'")
     subtitle: str = ""
     category: str = Field(description="Market category, e.g., 'Politics'")
@@ -79,6 +80,7 @@ class TradeProposal(BaseModel):
     trade_id: str = Field(description="Unique ID for this proposal (UUID)")
     ticker: str
     title: str
+    subtitle: str = Field(default="", description="Option name for multi-outcome markets (e.g., 'LeBron James')")
     side: Literal["YES", "NO"]
     contracts: int = Field(gt=0, description="Number of contracts to buy")
     limit_price: int = Field(ge=1, le=99, description="Price per contract in cents")
