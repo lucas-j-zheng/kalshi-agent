@@ -10,6 +10,7 @@ SECURITY: All trade execution requires ghost token validation.
 The agent CANNOT execute trades without explicit user approval.
 """
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal
@@ -21,6 +22,8 @@ from agent.security.ghost_token import (
     GhostTokenValidator,
     GhostTokenError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Service instances - initialized by init_services()
@@ -320,16 +323,41 @@ async def execute_trade(
 
         # Extract order info
         order_id = order_response.get("order_id", "unknown")
+        order_status = order_response.get("status", "unknown")
+        filled_count = order_response.get("filled_count", 0)
         fill_price = order_response.get("avg_fill_price", trade_details["limit_price"])
+
+        # Log for debugging
+        logger.info(
+            f"Order placed: id={order_id}, status={order_status}, "
+            f"filled={filled_count}/{trade_details['contracts']}, fill_price={fill_price}"
+        )
+
+        # Check if order was actually filled
+        if order_status == "resting" or filled_count == 0:
+            # Order is sitting in the book unfilled - cancel it and report failure
+            try:
+                kalshi_client.cancel_order(order_id)
+            except Exception:
+                pass  # Best effort cancellation
+            raise TradingError(
+                f"Order not filled - limit price {trade_details['limit_price']}c may be below market. "
+                f"Status: {order_status}, filled: {filled_count}/{trade_details['contracts']}. "
+                "Try again with a higher price or wait for better market conditions."
+            )
+
+        # Partial fill - warn but continue
+        actual_contracts = filled_count if filled_count > 0 else trade_details["contracts"]
+        actual_cost = actual_contracts * (fill_price / 100.0) if fill_price else trade_details["total_cost"]
 
         return ExecutedTrade(
             trade_id=trade_id,
             order_id=order_id,
             ticker=trade_details["ticker"],
             side=trade_details["side"],
-            contracts=trade_details["contracts"],
+            contracts=actual_contracts,
             fill_price=fill_price,
-            total_cost=trade_details["total_cost"],
+            total_cost=round(actual_cost, 2),
             executed_at=datetime.now(timezone.utc),
             reasoning=trade_details["reasoning"]
         )
