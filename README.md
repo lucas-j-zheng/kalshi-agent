@@ -14,6 +14,8 @@ tags:
 
 # Kalshi Alpha Agent
 
+[![Demo](https://img.shields.io/badge/Demo-HuggingFace%20Spaces-yellow)](https://huggingface.co/spaces/lzheng35/kalshi-alpha-agent)
+
 Convert natural language convictions into prediction market trades on [Kalshi](https://kalshi.com).
 
 **Not an auto-trading bot** - every trade requires explicit human approval via the Ghost Token security pattern.
@@ -134,4 +136,4 @@ The Gradio frontend (`frontend/app.py`) provides:
 - Portfolio view
 - Account balance display
 
-Deployed on HuggingFace Spaces via `app.py`.
+[![Demo](https://img.shields.io/badge/Demo-HuggingFace%20Spaces-yellow)](https://huggingface.co/spaces/lzheng35/kalshi-alpha-agent)
